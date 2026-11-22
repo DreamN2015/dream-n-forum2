@@ -454,6 +454,7 @@
     text-shadow:none !important;
     -webkit-text-stroke:0 !important;
     paint-order:normal !important;
+    text-align:left;
     font-weight:700;
     transition:color .35s linear;
   }
@@ -519,7 +520,7 @@
     </div>
 
     <div class="input-bar">
-      <input type="text" id="msgInput" placeholder="輸入你的即時回饋..." maxlength="60">
+      <input type="text" id="msgInput" placeholder="輸入你的即時回饋...">
       <button class="send-btn" id="sendBtn">送出</button>
     </div>
   </div>
@@ -614,13 +615,7 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
   }
 
   /* ---------------- 種子留言（示範資料，讓循環一開始就有內容） ---------------- */
-  var seedPool = [
-    "老師講解得好清楚！","這場交流會收穫滿滿","AI協力的成果真的很驚艷",
-    "簡報做得好用心","期待下次交流會","整場活動節奏很流暢",
-    "學到好多新的教學方法","分享的案例很有啟發性","太精彩了，拍手拍手",
-    "謝謝老師們的努力","這個設計好棒","跨班交流真的很有幫助",
-    "資料整理得很完整","現場氣氛超好的","希望能多辦幾場"
-  ];
+  /* 已清空示範留言：上線後只顯示資料庫裡的真實留言 */
 
   /* 彈幕顏色（自動適應背景）
      回饋區背景由青色（左，亮）漸層到藍色（右，暗），沒有任何單一顏色能在整個畫面都清晰，
@@ -694,20 +689,10 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     if(z !== b.zone){ b.zone = z; b.el.style.color = ZONE_COLORS[z][b.hue]; }
   }
 
-  function makeSeedMessages(){
-    var arr = [];
-    var n = 6 + Math.floor(Math.random()*5);
-    for(var i=0;i<n;i++){
-      var text = seedPool[Math.floor(Math.random()*seedPool.length)];
-      arr.push({text:text, isSelf:false, color:randomPastel(), ts:new Date()});
-    }
-    return arr;
-  }
-
   var messagesStore = {};
   var cursors = {};
   classesData.forEach(function(c){
-    messagesStore[c.name] = makeSeedMessages();
+    messagesStore[c.name] = [];
     cursors[c.name] = 0;
   });
 
@@ -923,21 +908,39 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     return msg;
   }
 
-  // 依標點符號切成多行；行數超過上限時，把後面的行合併回去
-  function splitByPunctuation(text, maxLines){
-    var parts = String(text).match(/[^，。！？、；：,.!?;:…~～\n]+[，。！？、；：,.!?;:…~～]*|[，。！？、；：,.!?;:…~～]+/g) || [text];
-    parts = parts.map(function(s){ return s.trim(); }).filter(Boolean);
-    if(parts.length === 0) return [String(text)];
-    while(parts.length > maxLines){
-      // 合併相鄰兩行中最短的一組
-      var best = 0, bestLen = Infinity;
-      for(var i=0;i<parts.length-1;i++){
-        var l = parts[i].length + parts[i+1].length;
-        if(l < bestLen){ bestLen = l; best = i; }
+  // 彈幕換行規則：
+  //  1. 遇到標點符號就換行（標點留在該行行尾）；連續標點（例如「！！」「？！」「⋯⋯」）視為一組，不拆開。
+  //  2. 同一段超過 10 個字就換行；為避免最後一行只剩 1～2 個字，會把長度平均分配（每行仍不超過 10 字）。
+  function splitByPunctuation(text){
+    var PUNCT = "，。！？、；：,.!?;:…⋯~～．﹗﹖‼⁉";
+    var MAX_CHARS = 10;
+    var chars = Array.from(String(text).replace(/\s*\n\s*/g, " ").trim());
+    var lines = [], body = [], tail = [];
+    function isP(c){ return PUNCT.indexOf(c) >= 0; }
+    function flush(){
+      var n = body.length;
+      if(n === 0){ var only = tail.join("").trim(); if(only) lines.push(only); tail = []; return; }
+      var k = Math.ceil(n / MAX_CHARS), size = Math.ceil(n / k), pos = 0;
+      for(var j=0;j<k;j++){
+        var part = body.slice(pos, pos + size).join("");
+        pos += size;
+        if(j === k - 1) part += tail.join("");      // 標點接在最後一行行尾
+        part = part.trim();
+        if(part) lines.push(part);
       }
-      parts.splice(best, 2, parts[best] + parts[best+1]);
+      body = []; tail = [];
     }
-    return parts;
+    for(var i=0;i<chars.length;i++){
+      var c = chars[i];
+      if(isP(c)){
+        tail.push(c);
+        if(!(i+1 < chars.length && isP(chars[i+1]))) flush();   // 這一組標點結束 → 換行
+      } else {
+        body.push(c);
+      }
+    }
+    flush();
+    return lines.length ? lines : [String(text)];
   }
 
   // 產生 / 回收一則彈幕；reuseObj 存在時代表「回收重派」，否則為新建
@@ -959,17 +962,13 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
       bulletObj = {el: el};
     }
 
-    // 電腦版：依標點符號分行（同一則、同一顏色）；手機版維持單行
-    if(isDesktop()){
-      var lines = splitByPunctuation(msg.text, Math.max(1, Math.floor((trackH * 0.92) / (fontSize * 1.25))));
-      el.textContent = lines.join("\n");
-      el.style.whiteSpace = "pre";
-      el.style.lineHeight = "1.25";
-    } else {
-      el.textContent = msg.text;
-      el.style.whiteSpace = "nowrap";
-      el.style.lineHeight = "";
-    }
+    // 依規則換行（標點換行、超過 10 字換行），文字靠左；行數太多放不下時縮小字體（最小 12px）
+    var lines = splitByPunctuation(msg.text);
+    while(lines.length > Math.max(1, Math.floor((trackH * 0.92) / (fontSize * 1.25))) && fontSize > 12){ fontSize -= 1; }
+    el.textContent = lines.join("\n");
+    el.style.whiteSpace = "pre";
+    el.style.lineHeight = "1.25";
+    el.style.textAlign = "left";
     el.style.fontSize = fontSize + "px";
 
     var blockH = el.offsetHeight || fontSize;
@@ -1071,7 +1070,7 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
   var sendBtn = document.getElementById("sendBtn");
 
   function sendMessage(){
-    var text = msgInput.value.trim().slice(0,100);
+    var text = msgInput.value.trim();
     if(!text || !currentClassId) return;
 
     var msg = {text: text, isSelf: true, color: randomPastel(), ts: new Date()};
@@ -1244,7 +1243,7 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
   }
   function buildXlsxBlob(rows){
     // rows: [{cls, text, time}]；欄位：序號 / 班級名稱 / 回饋內容 / 留言時間
-    function cell(ref, v, s){ return '<c r="' + ref + '" t="inlineStr"' + (s != null ? ' s="' + s + '"' : '') + '><is><t xml:space="preserve">' + xmlEsc(v) + '</t></is></c>'; }
+    function cell(ref, v, s){ return '<c r="' + ref + '" t="inlineStr"' + (s != null ? ' s="' + s + '"' : '') + '><is><t xml:space="preserve">' + xmlEsc(String(v == null ? "" : v).slice(0, 32000)) + '</t></is></c>'; }
     function num(ref, v, s){ return '<c r="' + ref + '"' + (s != null ? ' s="' + s + '"' : '') + '><v>' + v + '</v></c>'; }
     var sheetRows = '<row r="1" ht="24" customHeight="1">' + cell("A1","序號",1) + cell("B1","班級名稱",1) + cell("C1","回饋內容",1) + cell("D1","留言時間",1) + '</row>';
     rows.forEach(function(r, i){
